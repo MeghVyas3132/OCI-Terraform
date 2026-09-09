@@ -133,13 +133,38 @@ Everything here stays inside Always Free, provided you keep `ocpus ≤ 2`,
 `memory_in_gbs ≤ 12`, total storage ≤ 200 GB, and stay in your home region.
 Exceeding any of those silently converts the instance to a paid one.
 
-**Convert the account to Pay As You Go anyway.** Oracle reclaims Always Free
-compute it considers idle — 95th-percentile CPU under 20% across 7 days — and
-*stops* the instance. Restarting it requires A1 capacity to be available again,
-which is the whole problem this repo exists to solve, so a reclaimed instance
-can be effectively lost. PAYG accounts are exempt from reclamation and are
-still charged nothing while usage stays inside the Always Free limits. A
-low-traffic app will absolutely trip the idle threshold.
+## Idle reclamation
+
+Oracle may reclaim Always Free compute it deems idle, and losing an A1 instance
+matters more than usual — getting another one means winning the capacity race
+all over again.
+
+The test is stricter than it is usually reported. **All three** must hold across
+a rolling 7-day window:
+
+| Metric | Threshold |
+|---|---|
+| CPU, 95th percentile | < 20% |
+| Network | < 20% |
+| Memory *(A1 shapes only)* | < 20% |
+
+Any single metric staying above 20% keeps the instance. A genuinely deployed
+application clears the memory bar without trying: 20% of 12 GB is 2.4 GB, and
+Postgres plus an app server exceed that sitting idle at 3am. What gets reclaimed
+is a *parked* instance running nothing — not a quiet one running something.
+
+So low traffic alone is not the risk. Deploy the app and you are fine.
+
+**Converting to Pay As You Go removes the question anyway.** The policy is
+written against Always Free accounts, and PAYG usage that stays inside the
+Always Free limits is still billed at zero. Oracle's own page does not spell the
+exemption out, so treat it as strong convention rather than a guarantee — and
+set a budget alert at your currency's minimum when you convert, so anything
+that does become billable reaches you immediately.
+
+Resist the CPU-burner tricks (`lookbusy`, "NeverIdle" and friends). They exist
+to game a CPU-only reading of the rule, they waste one of your two cores, and
+the memory condition already protects a real workload.
 
 ## Running an application on it
 
