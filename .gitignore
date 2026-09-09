@@ -15,3 +15,6 @@ terraform/terraform.tfvars
 
 # Runtime state produced by the retry driver
 .run/
+
+# Deploy secrets
+deploy/.env

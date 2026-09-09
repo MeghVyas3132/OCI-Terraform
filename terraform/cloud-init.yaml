@@ -1,0 +1,128 @@
+#cloud-config
+#
+# First-boot setup. Read once, at first boot only — editing this file has no
+# effect on a running instance.
+#
+# Job: get the data volume mounted at /data BEFORE Docker starts, so Docker's
+# data-root lands on the block volume rather than filling the boot disk.
+
+package_update: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - jq
+  - iptables-persistent
+
+write_files:
+  # ---------------------------------------------------------------------
+  - path: /usr/local/sbin/prepare-data-volume.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      MOUNT=/data
+      mkdir -p "$MOUNT"
+
+      # A paravirtualized attachment can lag first boot by a minute or two.
+      DEV=""
+      for _ in $(seq 1 90); do
+        for candidate in /dev/oracleoci/oraclevdb /dev/sdb; do
+          if [ -b "$candidate" ]; then DEV="$candidate"; break 2; fi
+        done
+        sleep 2
+      done
+
+      if [ -z "$DEV" ]; then
+        echo "data-volume: nothing attached; /data stays on the boot disk"
+        mkdir -p "$MOUNT"/{docker,postgres,caddy,uploads}
+        exit 0
+      fi
+
+      # Format ONLY a genuinely blank disk. An existing filesystem means this is
+      # a reattached volume full of databases — never touch it.
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        echo "data-volume: formatting blank device $DEV"
+        mkfs.ext4 -F -L appdata "$DEV"
+      else
+        echo "data-volume: $DEV already has a filesystem, leaving it alone"
+      fi
+
+      grep -q '^LABEL=appdata' /etc/fstab || \
+        echo "LABEL=appdata $MOUNT ext4 defaults,noatime,nofail,x-systemd.device-timeout=30 0 2" >> /etc/fstab
+
+      mountpoint -q "$MOUNT" || mount "$MOUNT"
+      mkdir -p "$MOUNT"/{docker,postgres,caddy,uploads}
+      echo "data-volume: $DEV mounted at $MOUNT"
+
+  # ---------------------------------------------------------------------
+  - path: /etc/systemd/system/data-volume.service
+    content: |
+      [Unit]
+      Description=Prepare the /data block volume
+      After=local-fs.target
+      Before=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/prepare-data-volume.sh
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Docker must not start until /data exists, or it silently recreates its
+  # data-root on the boot disk and you lose every image on the next reboot.
+  - path: /etc/systemd/system/docker.service.d/10-data-volume.conf
+    content: |
+      [Unit]
+      After=data-volume.service
+      Requires=data-volume.service
+
+  # ---------------------------------------------------------------------
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "data-root": "/data/docker",
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+
+runcmd:
+  # OCI's Ubuntu images ship an INPUT chain that rejects everything except SSH.
+  # Without this the security list opens 80/443 and the host still refuses them
+  # — the single most common "my site is unreachable" cause on OCI.
+  - iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+  - netfilter-persistent save
+
+  # Docker from Docker's own repo; Ubuntu's packaged version lags on arm64.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+
+  # Mount /data first so Docker's data-root exists before the daemon starts.
+  - systemctl daemon-reload
+  - systemctl enable --now data-volume.service
+
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - usermod -aG docker ubuntu
+  - systemctl enable --now docker
+
+  # 12 GB and no swap is asking for an OOM kill during a traffic spike.
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - sysctl -w vm.swappiness=10
+  - echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf
+
+final_message: "Ready after $UPTIME seconds. /data mounted, Docker on the block volume."

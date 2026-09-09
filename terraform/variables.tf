@@ -133,6 +133,38 @@ variable "subnet_cidr" {
   default     = "10.0.1.0/24"
 }
 
+variable "allowed_http_cidr" {
+  description = "Source CIDR permitted to reach ports 80 and 443."
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "create_block_volume" {
+  description = <<-EOT
+    Attach a separate block volume for application state. Strongly recommended:
+    it keeps Docker images, Postgres data and uploads off the boot disk, so the
+    boot volume stays a thin disposable OS disk and everything you care about
+    sits on one volume you can snapshot.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "block_volume_size_in_gbs" {
+  description = <<-EOT
+    Size of the data volume. Always Free gives 200 GB across boot + block, so
+    this plus boot_volume_size_in_gbs must not exceed 200. Default pairs with a
+    50 GB boot volume to use the allowance exactly.
+  EOT
+  type        = number
+  default     = 150
+
+  validation {
+    condition     = var.block_volume_size_in_gbs >= 50 && var.block_volume_size_in_gbs <= 150
+    error_message = "Block volumes start at 50 GB; 150 is the most that fits alongside a 50 GB boot volume."
+  }
+}
+
 variable "allowed_ssh_cidr" {
   description = "Source CIDR permitted to reach port 22. Narrow this to your IP if you can."
   type        = string

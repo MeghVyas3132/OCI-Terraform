@@ -1,0 +1,126 @@
+# Multi-app stack for a single 2 OCPU / 12 GB Ampere host.
+#
+# Every service is memory-capped on purpose. With 12 GB shared between several
+# apps, one runaway container must not be able to OOM the whole box — the caps
+# below are what turn "everything died" into "one app restarted".
+#
+# All persistent state lives under /data, which is the block volume.
+
+name: apps
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------
+  # Edge. Terminates TLS, gets certificates automatically, routes by host.
+  # ---------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /data/caddy/data:/data
+      - /data/caddy/config:/config
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      QUICKCOMMERCE_DOMAIN: ${QUICKCOMMERCE_DOMAIN}
+      LARP_DOMAIN: ${LARP_DOMAIN}
+    networks: [edge]
+    mem_limit: 256m
+    logging: *logging
+
+  # ---------------------------------------------------------------------
+  # One Postgres, one database per app. Running a separate Postgres per app
+  # would waste 1-2 GB apiece on a box that only has 12.
+  # ---------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_DATABASES:-quickcommerce,larp}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-multiple-databases.sh:ro
+    # Tuned for the 3 GB cap below, not for a 12 GB machine.
+    command: >
+      postgres
+      -c shared_buffers=768MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=192MB
+      -c work_mem=8MB
+      -c max_connections=120
+      -c random_page_cost=1.1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [backend]
+    mem_limit: 3g
+    shm_size: 256m
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 384mb --maxmemory-policy allkeys-lru --save ""
+    networks: [backend]
+    mem_limit: 512m
+    logging: *logging
+
+  # ---------------------------------------------------------------------
+  # Applications.
+  #
+  # image:, never build:. Building a Next.js app here would saturate both
+  # cores and take every other app down with it. Build in CI, push to a
+  # registry, and pull the tag here.
+  # ---------------------------------------------------------------------
+  quickcommerce:
+    image: ${QUICKCOMMERCE_IMAGE:?set QUICKCOMMERCE_IMAGE in .env}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/quickcommerce
+      REDIS_URL: redis://redis:6379/0
+      NODE_ENV: production
+    volumes:
+      - /data/uploads/quickcommerce:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [edge, backend]
+    mem_limit: 1500m
+    logging: *logging
+
+  larp:
+    image: ${LARP_IMAGE:?set LARP_IMAGE in .env}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/larp
+      REDIS_URL: redis://redis:6379/1
+      NODE_ENV: production
+    volumes:
+      - /data/uploads/larp:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [edge, backend]
+    mem_limit: 1500m
+    logging: *logging
+
+networks:
+  # Split so that only apps Caddy actually serves are reachable from the edge,
+  # and Postgres is on a network with no route to the outside world.
+  edge:
+  backend:
+    internal: true

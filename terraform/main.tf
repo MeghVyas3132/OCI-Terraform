@@ -85,6 +85,26 @@ resource "oci_core_security_list" "this" {
     }
   }
 
+  ingress_security_rules {
+    source   = var.allowed_http_cidr
+    protocol = "6" # TCP
+
+    tcp_options {
+      min = 80
+      max = 80
+    }
+  }
+
+  ingress_security_rules {
+    source   = var.allowed_http_cidr
+    protocol = "6" # TCP
+
+    tcp_options {
+      min = 443
+      max = 443
+    }
+  }
+
   # ICMP path MTU discovery, otherwise large packets silently hang.
   ingress_security_rules {
     source   = "0.0.0.0/0"
@@ -140,6 +160,11 @@ resource "oci_core_instance" "arm" {
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
+
+    # Only ever read on first boot, which is why ignore_changes on metadata
+    # below is safe: editing cloud-init.yaml later changes nothing on a running
+    # instance, and must not be allowed to trigger a replacement.
+    user_data = base64encode(file("${path.module}/cloud-init.yaml"))
   }
 
   lifecycle {
@@ -155,4 +180,49 @@ resource "oci_core_instance" "arm" {
   timeouts {
     create = "15m"
   }
+}
+
+# ---------------------------------------------------------------------------
+# Data volume.
+#
+# Block volumes are availability-domain local, so this deliberately reads the
+# AD off the instance rather than off ad_index: attempts rotate through ADs,
+# and the volume has to land in whichever one finally had capacity. Referencing
+# the instance also orders creation correctly — nothing here is attempted until
+# an instance actually exists.
+# ---------------------------------------------------------------------------
+
+resource "oci_core_volume" "data" {
+  count = var.create_block_volume ? 1 : 0
+
+  compartment_id      = var.compartment_ocid
+  availability_domain = oci_core_instance.arm.availability_domain
+  display_name        = "${var.instance_name}-data"
+  size_in_gbs         = var.block_volume_size_in_gbs
+
+  lifecycle {
+    precondition {
+      condition = var.boot_volume_size_in_gbs + var.block_volume_size_in_gbs <= 200
+      error_message = format(
+        "boot (%d GB) + block (%d GB) = %d GB, over the 200 GB Always Free allowance.",
+        var.boot_volume_size_in_gbs,
+        var.block_volume_size_in_gbs,
+        var.boot_volume_size_in_gbs + var.block_volume_size_in_gbs,
+      )
+    }
+
+    # Never let a config change destroy the volume holding every database.
+    prevent_destroy = true
+  }
+}
+
+resource "oci_core_volume_attachment" "data" {
+  count = var.create_block_volume ? 1 : 0
+
+  attachment_type = "paravirtualized"
+  instance_id     = oci_core_instance.arm.id
+  volume_id       = oci_core_volume.data[0].id
+
+  # Surfaces as /dev/oracleoci/oraclevdb, which cloud-init waits for.
+  device = "/dev/oracleoci/oraclevdb"
 }

@@ -166,30 +166,71 @@ Resist the CPU-burner tricks (`lookbusy`, "NeverIdle" and friends). They exist
 to game a CPU-only reading of the rule, they waste one of your two cores, and
 the memory condition already protects a real workload.
 
-## Running an application on it
+## Running applications on it
 
-2 OCPU of Ampere and 12 GB of RAM comfortably carries a PWA at university
-scale — order of 1,000 registered users, a few hundred concurrent at peak.
-Compute will not be your constraint. Two things will:
+2 OCPU of Ampere and 12 GB carries several low-traffic apps at university
+scale. Memory is the ceiling, not CPU, so [`deploy/`](deploy/) caps every
+container:
 
-**Catalog images.** Do not serve them from the instance, and do not serve them
-straight from OCI Object Storage either. The binding limit is not the 20 GB of
-storage, it is **50,000 API requests per month** — a few hundred users browsing
-a large catalog will exhaust that in days. Put a CDN in front so origin hits
-are rare, or keep media on Cloudflare R2, whose free tier is far more
-generous for this access pattern. Outbound transfer from OCI itself is 10 TB a
-month, so egress is not a concern.
+| Service | Cap |
+|---|---|
+| Caddy — TLS + host routing | 256 MB |
+| Postgres — one DB per app | 3 GB |
+| Redis | 512 MB |
+| Each application | 1.5 GB |
 
-**Database durability.** Keep Postgres on a block volume carved out of the
-spare 150 GB, not on the boot volume, and snapshot it. Catalog *text* is small;
-it is images and backups that grow.
+That is 6.8 GB committed with two apps running, leaving room for roughly three
+more before the box is full. The caps are the point: with several apps sharing
+12 GB, one runaway container must not be able to OOM the machine.
 
-For payments, use a hosted checkout (Razorpay, Stripe) and never let card data
-reach the instance — that keeps you out of PCI scope entirely.
+```bash
+scp -r deploy ubuntu@<ip>:~/            # first time
+ssh ubuntu@<ip>
+cd deploy && cp .env.example .env && $EDITOR .env
+docker compose up -d
+```
 
-Be clear-eyed that this is one instance with no redundancy: a single AD, a
-single host, no load balancer, no failover. That is fine for a university
-project and not fine for anything people rely on being up.
+Point your DNS A records at the instance *before* the first `up`, or Caddy will
+fail certificate issuance and eat into Let's Encrypt's rate limit.
+
+Adding an app is a service block in `docker-compose.yml` and three lines in the
+`Caddyfile`.
+
+### Four things that will actually bite you
+
+**Never build on the box.** A Next.js build saturates both cores and takes every
+other app down with it. Build in CI, push to a registry, pull the tag here —
+which is why the compose file uses `image:` and not `build:`.
+
+**State belongs on the block volume.** cloud-init mounts it at `/data` and
+points Docker's `data-root` there before the daemon first starts. Docker images
+across several apps reach 20-40 GB quickly, and the boot disk is only 50 GB.
+Everything you care about — Postgres, uploads, certificates — sits on one
+volume you can snapshot.
+
+**Catalog images do not belong in Object Storage directly.** The binding limit
+is 50,000 API requests per month, not the 20 GB of capacity. A few hundred
+people browsing a large catalog exhausts that in days, and it gets worse as apps
+are added. Put a CDN in front, or keep media on Cloudflare R2. OCI egress itself
+is 10 TB/month, so bandwidth is not the constraint.
+
+**Payments never touch the instance.** Use hosted checkout (Razorpay, Stripe) so
+card data stays out of your infrastructure and out of PCI scope.
+
+### Don't split the allowance
+
+Always Free lets you carve 2 OCPU into two 1-OCPU/6 GB instances. Resist it. One
+2-core/12 GB host pools memory instead of stranding it, runs one Postgres
+instead of two, and — the real argument — means winning the capacity race
+**once** instead of twice.
+
+### The honest limits
+
+One instance, one availability domain, no failover: every app goes down
+together, and 2 OCPU is a hard ceiling with no headroom to scale up. Fine for
+university projects. If one of these takes off, a second host behind the free
+10 Mbps load balancer is the next step — and a EUR 4/month Hetzner ARM box is a
+saner backstop than winning another OCI capacity race.
 
 ## Notes
 

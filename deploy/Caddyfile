@@ -1,0 +1,34 @@
+{
+	email {$ACME_EMAIL}
+	# Certificates are issued on first request and persisted to /data, which is
+	# the block volume — so a container rebuild does not re-request them and
+	# burn Let's Encrypt rate limits.
+}
+
+(common) {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options    "nosniff"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+{$QUICKCOMMERCE_DOMAIN} {
+	import common
+	reverse_proxy quickcommerce:3000
+}
+
+{$LARP_DOMAIN} {
+	import common
+	reverse_proxy larp:3000
+}
+
+# Adding an app is three lines here plus a service in docker-compose.yml:
+#
+# {$SOMETHING_DOMAIN} {
+# 	import common
+# 	reverse_proxy something:3000
+# }
