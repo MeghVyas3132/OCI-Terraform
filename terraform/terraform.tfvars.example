@@ -13,7 +13,7 @@ compartment_ocid = "ocid1.tenancy.oc1..aaaa..."  # root compartment = tenancy OC
 instance_name           = "arm-always-free"
 ocpus                   = 2
 memory_in_gbs           = 12
-boot_volume_size_in_gbs = 200
+boot_volume_size_in_gbs = 50   # leaves 150 GB of the 200 GB allowance spare
 
 # --- SSH ---
 ssh_public_key = "ssh-ed25519 AAAA... meghvyas03@gmail.com"

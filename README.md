@@ -34,9 +34,9 @@ The defaults in this repo are the current ceiling:
 
 Two caveats worth knowing before you start:
 
-- The default `boot_volume_size_in_gbs = 200` consumes your **entire** storage
-  allowance. You will not be able to create any other volume. Drop it to 50 if
-  you would rather keep room to spare.
+- `boot_volume_size_in_gbs` defaults to **50**, leaving 150 GB of the 200 GB
+  allowance for a separate block volume. Put your database there rather than on
+  the boot volume — it survives an instance rebuild and snapshots independently.
 - Always Free A1 exists **only in your home region**. Pointing `region` at
   anything else either fails or quietly bills you.
 
@@ -132,6 +132,39 @@ hard-won instance just because the AD index has rotated on.
 Everything here stays inside Always Free, provided you keep `ocpus ≤ 2`,
 `memory_in_gbs ≤ 12`, total storage ≤ 200 GB, and stay in your home region.
 Exceeding any of those silently converts the instance to a paid one.
+
+**Convert the account to Pay As You Go anyway.** Oracle reclaims Always Free
+compute it considers idle — 95th-percentile CPU under 20% across 7 days — and
+*stops* the instance. Restarting it requires A1 capacity to be available again,
+which is the whole problem this repo exists to solve, so a reclaimed instance
+can be effectively lost. PAYG accounts are exempt from reclamation and are
+still charged nothing while usage stays inside the Always Free limits. A
+low-traffic app will absolutely trip the idle threshold.
+
+## Running an application on it
+
+2 OCPU of Ampere and 12 GB of RAM comfortably carries a PWA at university
+scale — order of 1,000 registered users, a few hundred concurrent at peak.
+Compute will not be your constraint. Two things will:
+
+**Catalog images.** Do not serve them from the instance, and do not serve them
+straight from OCI Object Storage either. The binding limit is not the 20 GB of
+storage, it is **50,000 API requests per month** — a few hundred users browsing
+a large catalog will exhaust that in days. Put a CDN in front so origin hits
+are rare, or keep media on Cloudflare R2, whose free tier is far more
+generous for this access pattern. Outbound transfer from OCI itself is 10 TB a
+month, so egress is not a concern.
+
+**Database durability.** Keep Postgres on a block volume carved out of the
+spare 150 GB, not on the boot volume, and snapshot it. Catalog *text* is small;
+it is images and backups that grow.
+
+For payments, use a hosted checkout (Razorpay, Stripe) and never let card data
+reach the instance — that keeps you out of PCI scope entirely.
+
+Be clear-eyed that this is one instance with no redundancy: a single AD, a
+single host, no load balancer, no failover. That is fine for a university
+project and not fine for anything people rely on being up.
 
 ## Notes
 

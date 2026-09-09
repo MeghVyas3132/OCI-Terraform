@@ -62,12 +62,13 @@ variable "memory_in_gbs" {
 
 variable "boot_volume_size_in_gbs" {
   description = <<-EOT
-    Boot volume size. Minimum 47, default 50. Always Free gives 200 GB TOTAL
-    across all boot + block volumes, so 200 here consumes the entire allowance
-    and leaves room for no other volumes.
+    Boot volume size. Minimum 47. Always Free gives 200 GB TOTAL across all
+    boot + block volumes, so 50 here leaves 150 GB spare for a separate block
+    volume — worth doing for database storage, since a block volume survives
+    the instance being rebuilt and can be snapshotted independently.
   EOT
   type        = number
-  default     = 200
+  default     = 50
 
   validation {
     condition     = var.boot_volume_size_in_gbs >= 47 && var.boot_volume_size_in_gbs <= 200
