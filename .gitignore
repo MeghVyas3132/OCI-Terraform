@@ -1,2 +1,17 @@
 vendor/
 .env
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfplan
+terraform/crash.log
+
+# Secrets — never commit these
+terraform/terraform.tfvars
+*.pem
+*.key
+
+# Runtime state produced by the retry driver
+.run/

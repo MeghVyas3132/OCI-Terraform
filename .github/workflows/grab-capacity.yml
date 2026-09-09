@@ -1,0 +1,97 @@
+name: Grab OCI ARM capacity
+
+# Runs on GitHub's clock, so it keeps hunting while the laptop is shut.
+# 5 minutes is GitHub's floor for scheduled workflows, and free-tier cron is
+# best-effort — expect drift under load.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# Never let two attempts race each other into a double instance.
+concurrency:
+  group: oci-capacity
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write   # so a win can switch this workflow off
+
+jobs:
+  attempt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      TF_VAR_tenancy_ocid:     ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_user_ocid:        ${{ secrets.OCI_USER_OCID }}
+      TF_VAR_fingerprint:      ${{ secrets.OCI_FINGERPRINT }}
+      TF_VAR_region:           ${{ secrets.OCI_REGION }}
+      TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      TF_VAR_ssh_public_key:   ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_private_key_path: /home/runner/.oci/oci_api_key.pem
+      TF_VAR_instance_name:    arm-always-free
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write OCI credentials
+        run: |
+          mkdir -p ~/.oci
+          printf '%s' "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=/home/runner/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Install OCI CLI
+        run: pipx install oci-cli
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Attempt
+        id: attempt
+        run: |
+          set +e
+          bash scripts/attempt.sh
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the win
+        if: steps.attempt.outputs.rc == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IP="$(grep -E '^public_ip=' .run/SUCCESS 2>/dev/null | cut -d= -f2 || echo unknown)"
+          gh issue create \
+            --title "ARM instance acquired — $IP" \
+            --body "Capacity finally came free and the instance is running at \`$IP\`.
+
+          Connect with:
+
+              ssh ubuntu@$IP
+
+          This workflow has been disabled automatically so it stops burning
+          Actions minutes. Re-enable it from the Actions tab if you need it."
+          gh workflow disable "Grab OCI ARM capacity" || true
+
+      - name: Stop on hard failure
+        if: steps.attempt.outputs.rc == '4'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "OCI capacity hunt stopped — configuration problem" \
+            --body "\`attempt.sh\` exited 4: bad credentials, or the account quota is
+          already used up. The workflow is now disabled; check the run log,
+          fix the cause, then re-enable it from the Actions tab."
+          gh workflow disable "Grab OCI ARM capacity" || true
+          exit 1

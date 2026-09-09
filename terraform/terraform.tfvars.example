@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+# Every OCID below comes from the OCI Console — see README for exactly where.
+
+# --- Auth ---
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaa..."
+user_ocid        = "ocid1.user.oc1..aaaa..."
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "/Users/meghvyas/.oci/oci_api_key.pem"
+region           = "ap-mumbai-1"   # MUST be your home region
+compartment_ocid = "ocid1.tenancy.oc1..aaaa..."  # root compartment = tenancy OCID
+
+# --- Shape (these defaults are the current Always Free maximum) ---
+instance_name           = "arm-always-free"
+ocpus                   = 2
+memory_in_gbs           = 12
+boot_volume_size_in_gbs = 200
+
+# --- SSH ---
+ssh_public_key = "ssh-ed25519 AAAA... meghvyas03@gmail.com"
+
+# --- Image ---
+operating_system         = "Canonical Ubuntu"
+operating_system_version = "22.04"
+
+# --- Network ---
+create_network   = true
+allowed_ssh_cidr = "0.0.0.0/0"   # narrow to "<your.ip>/32" once you're in
