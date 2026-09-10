@@ -10,6 +10,23 @@ LABEL="com.meghvyas.oci-capacity"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 INTERVAL="${INTERVAL:-60}"
 
+# launchd agents get no access to ~/Desktop, ~/Documents or ~/Downloads unless
+# the executable has Full Disk Access, which /bin/bash does not. A repo under
+# any of those fails at runtime with a bare "Operation not permitted" and an
+# empty log, so refuse up front rather than let it fail silently every minute.
+case "$REPO_ROOT" in
+  "$HOME"/Desktop/*|"$HOME"/Documents/*|"$HOME"/Downloads/*)
+    echo "ERROR: $REPO_ROOT sits under a macOS-protected folder."
+    echo
+    echo "  launchd cannot execute anything there without granting /bin/bash"
+    echo "  Full Disk Access, which would apply to every script on the machine."
+    echo
+    echo "  Move the repo somewhere unprotected and re-run:"
+    echo "      mv \"$REPO_ROOT\" ~/oci-capacity && cd ~/oci-capacity"
+    exit 1
+    ;;
+esac
+
 echo "==> Installing dependencies"
 command -v brew >/dev/null || { echo "Homebrew required: https://brew.sh"; exit 1; }
 # Terraform left homebrew-core when HashiCorp moved to the BSL licence, so it

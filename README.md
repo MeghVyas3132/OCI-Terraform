@@ -68,6 +68,12 @@ $EDITOR terraform/terraform.tfvars
 
 ### 3a. Run it on the Mac
 
+> **Keep this repo out of `~/Desktop`, `~/Documents` and `~/Downloads`.** macOS
+> denies launchd agents access to those folders, so the timer fires every minute
+> and dies with a bare `Operation not permitted` and nothing in the log. The
+> installer refuses to run from them. Anywhere else — `~/oci-capacity` is fine.
+
+
 ```bash
 ./scripts/install-macos.sh
 ```
